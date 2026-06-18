@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="AI-powered financial document analysis dashboard — 10-K filings, earnings calls, tone analysis, risk factors, benchmarking, and investment memos." />
+    <title>FinAnalyst AI — Financial Document Analyst</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/css/style.css" />
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+    <!-- ─── HEADER ──────────────────────────────────────────────── -->
+    <header class="app-header" id="appHeader">
+        <div class="header-brand">
+            <div class="brand-icon">
+                <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+                    <rect x="2" y="16" width="5" height="10" rx="1.5" fill="var(--accent)" opacity="0.6"/>
+                    <rect x="9" y="10" width="5" height="16" rx="1.5" fill="var(--accent)" opacity="0.8"/>
+                    <rect x="16" y="4" width="5" height="22" rx="1.5" fill="var(--accent)"/>
+                    <circle cx="22" cy="6" r="4" fill="var(--accent-secondary)" opacity="0.9"/>
+                </svg>
+            </div>
+            <div>
+                <h1>FinAnalyst <span class="brand-ai">AI</span></h1>
+                <p class="brand-tagline">Intelligent Financial Document Analysis</p>
+            </div>
+        </div>
+        <div class="header-status">
+            <span class="status-dot"></span>
+            <span class="status-text" id="statusText">Ready</span>
+        </div>
+    </header>
+
+    <!-- ─── CONTROLS BAR ────────────────────────────────────────── -->
+    <section class="controls-bar" id="controlsBar">
+        <div class="control-group">
+            <label for="companySelect">Company</label>
+            <select id="companySelect">
+                <option value="">— Select Company —</option>
+            </select>
+        </div>
+        <div class="control-group">
+            <label for="periodSelect">Period</label>
+            <select id="periodSelect">
+                <option value="">— Select Period —</option>
+            </select>
+        </div>
+        <button class="btn btn-primary" id="loadBtn" onclick="handleLoad()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 8h12M8 2v12"/></svg>
+            Analyze
+        </button>
+        <button class="btn btn-ghost" id="refreshBtn" onclick="loadDocuments()">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 8a7 7 0 0113.25-3M15 8a7 7 0 01-13.25 3"/><path d="M14.25 1v4h-4M1.75 15v-4h4"/></svg>
+            Refresh
+        </button>
+    </section>
+
+    <!-- ─── TAB NAVIGATION ──────────────────────────────────────── -->
+    <nav class="tab-nav" id="tabNav">
+        <button class="tab-btn active" data-tab="metrics" onclick="switchTab('metrics')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="1" width="14" height="14" rx="2"/><path d="M4 11V7M8 11V5M12 11V3"/></svg>
+            Metrics
+        </button>
+        <button class="tab-btn" data-tab="compare" onclick="switchTab('compare')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 14V8M8 14V2M12 14V6"/><path d="M2 6l4-4 4 4 4-4"/></svg>
+            Compare
+        </button>
+        <button class="tab-btn" data-tab="tone" onclick="switchTab('tone')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M5 10s1.5 2 3 2 3-2 3-2M6 6h0M10 6h0"/></svg>
+            Tone
+        </button>
+        <button class="tab-btn" data-tab="risks" onclick="switchTab('risks')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1L1 14h14L8 1z"/><path d="M8 6v4M8 12h0"/></svg>
+            Risks
+        </button>
+        <button class="tab-btn" data-tab="benchmark" onclick="switchTab('benchmark')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="3" width="14" height="10" rx="1"/><path d="M1 6h14M5 6v7M10 6v7"/></svg>
+            Benchmark
+        </button>
+        <button class="tab-btn" data-tab="memo" onclick="switchTab('memo')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 1h10a1 1 0 011 1v12a1 1 0 01-1 1H3a1 1 0 01-1-1V2a1 1 0 011-1z"/><path d="M5 5h6M5 8h6M5 11h3"/></svg>
+            Memo
+        </button>
+        <button class="tab-btn" data-tab="ask" onclick="switchTab('ask')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6"/><path d="M6 6a2 2 0 012-2 2 2 0 012 2c0 1.5-2 2-2 3M8 12h0"/></svg>
+            Ask AI
+        </button>
+        <button class="tab-btn" data-tab="upload" onclick="switchTab('upload')">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 10V2M5 5l3-3 3 3"/><path d="M2 10v3a1 1 0 001 1h10a1 1 0 001-1v-3"/></svg>
+            Upload
+        </button>
+    </nav>
+
+    <!-- ─── CONTENT PANELS ──────────────────────────────────────── -->
+    <main class="content" id="mainContent">
+
+        <!-- METRICS -->
+        <section class="panel active" id="panel-metrics">
+            <div class="panel-header">
+                <h2>Financial Metrics</h2>
+                <p class="panel-desc">Key financial figures extracted from the filing</p>
+            </div>
+            <div class="metrics-grid" id="metricsGrid">
+                <div class="empty-state">
+                    <p>Select a company and period, then click <strong>Analyze</strong></p>
+                </div>
+            </div>
+            <div class="chart-container">
+                <canvas id="metricsChart"></canvas>
+            </div>
+        </section>
+
+        <!-- COMPARE -->
+        <section class="panel" id="panel-compare">
+            <div class="panel-header">
+                <h2>Period Comparison</h2>
+                <p class="panel-desc">Year-over-year changes in financial metrics</p>
+            </div>
+            <div class="compare-controls">
+                <div class="control-group">
+                    <label for="priorPeriodSelect">Prior Period</label>
+                    <select id="priorPeriodSelect">
+                        <option value="">— Auto (prior year) —</option>
+                    </select>
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="loadCompare()">Compare</button>
+            </div>
+            <div id="compareContent" class="table-wrapper">
+                <div class="empty-state"><p>Run a comparison to see YoY deltas</p></div>
+            </div>
+        </section>
+
+        <!-- TONE -->
+        <section class="panel" id="panel-tone">
+            <div class="panel-header">
+                <h2>Management Tone</h2>
+                <p class="panel-desc">Sentiment analysis of management commentary</p>
+            </div>
+            <div id="toneContent">
+                <div class="empty-state"><p>Select a company and period to analyze tone</p></div>
+            </div>
+        </section>
+
+        <!-- RISKS -->
+        <section class="panel" id="panel-risks">
+            <div class="panel-header">
+                <h2>Risk Factors</h2>
+                <p class="panel-desc">Extracted risk disclosures from the filing</p>
+            </div>
+            <div id="risksContent" class="risks-grid">
+                <div class="empty-state"><p>Select a company and period to extract risks</p></div>
+            </div>
+        </section>
+
+        <!-- BENCHMARK -->
+        <section class="panel" id="panel-benchmark">
+            <div class="panel-header">
+                <h2>Competitor Benchmark</h2>
+                <p class="panel-desc">Cross-company comparison of key metrics</p>
+            </div>
+            <div class="benchmark-controls">
+                <div class="control-group">
+                    <label for="benchmarkTickers">Tickers (comma-separated)</label>
+                    <input type="text" id="benchmarkTickers" placeholder="e.g. TVIZ,GNRG,HLTH" />
+                </div>
+                <button class="btn btn-primary btn-sm" onclick="loadBenchmark()">Run Benchmark</button>
+            </div>
+            <div id="benchmarkContent" class="table-wrapper">
+                <div class="empty-state"><p>Enter peer tickers and period to benchmark</p></div>
+            </div>
+            <div class="chart-container">
+                <canvas id="benchmarkChart"></canvas>
+            </div>
+        </section>
+
+        <!-- MEMO -->
+        <section class="panel" id="panel-memo">
+            <div class="panel-header">
+                <h2>Investment Memo</h2>
+                <p class="panel-desc">AI-generated investment thesis grounded in extracted data</p>
+            </div>
+            <div class="memo-controls">
+                <div class="control-group">
+                    <label for="memoPeers">Peer Tickers (optional)</label>
+                    <input type="text" id="memoPeers" placeholder="e.g. GNRG,HLTH" />
+                </div>
+                <button class="btn btn-primary btn-sm" id="memoBtn" onclick="generateMemo()">
+                    Generate Memo
+                </button>
+            </div>
+            <div id="memoContent">
+                <div class="empty-state"><p>Generate an investment memo for the selected company</p></div>
+            </div>
+        </section>
+
+        <!-- ASK AI -->
+        <section class="panel" id="panel-ask">
+            <div class="panel-header">
+                <h2>Ask AI</h2>
+                <p class="panel-desc">Ask questions about the ingested financial documents</p>
+            </div>
+            <div class="ask-container">
+                <div class="ask-input-row">
+                    <input type="text" id="askInput" placeholder="e.g. What are the main revenue drivers for TVIZ?" onkeydown="if(event.key==='Enter')askQuestion()" />
+                    <button class="btn btn-primary" onclick="askQuestion()">Ask</button>
+                </div>
+                <div id="askContent" class="ask-response">
+                    <div class="empty-state"><p>Ask any question about the uploaded filings</p></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- UPLOAD -->
+        <section class="panel" id="panel-upload">
+            <div class="panel-header">
+                <h2>Upload Document</h2>
+                <p class="panel-desc">Upload a new 10-K filing or earnings call transcript</p>
+            </div>
+            <form class="upload-form" id="uploadForm" onsubmit="event.preventDefault(); uploadFile();">
+                <div class="upload-dropzone" id="dropzone">
+                    <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="var(--accent)" stroke-width="2">
+                        <path d="M20 26V10M14 16l6-6 6 6"/><path d="M6 26v6a2 2 0 002 2h24a2 2 0 002-2v-6"/>
+                    </svg>
+                    <p>Drag & drop or <label for="fileInput" class="upload-link">browse</label></p>
+                    <span class="upload-hint">Supports .txt and .pdf</span>
+                    <input type="file" id="fileInput" accept=".txt,.pdf" hidden />
+                </div>
+                <p class="file-name" id="fileName"></p>
+                <div class="upload-fields">
+                    <div class="control-group">
+                        <label for="uploadTicker">Ticker</label>
+                        <input type="text" id="uploadTicker" placeholder="e.g. TVIZ" required />
+                    </div>
+                    <div class="control-group">
+                        <label for="uploadPeriod">Period</label>
+                        <input type="text" id="uploadPeriod" placeholder="e.g. FY2024" required />
+                    </div>
+                    <div class="control-group">
+                        <label for="uploadDocType">Doc Type</label>
+                        <select id="uploadDocType" required>
+                            <option value="10-K">10-K Filing</option>
+                            <option value="earnings_call">Earnings Call</option>
+                        </select>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-lg" id="uploadBtn">
+                    Upload & Ingest
+                </button>
+            </form>
+        </section>
+
+    </main>
+
+    <!-- ─── TOAST CONTAINER ─────────────────────────────────────── -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <!-- ─── LOADING OVERLAY ─────────────────────────────────────── -->
+    <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+        <p id="loadingText">Processing…</p>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
