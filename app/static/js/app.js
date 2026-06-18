@@ -424,16 +424,22 @@ function setupUpload() {
     btn.textContent = "Uploading…";
     try {
       const result = await api("/upload", { method: "POST", body: formData });
-      toast(`Indexed ${result.ticker} ${result.period_label} (${result.doc_type}) — sections: ${result.sections.join(", ")}`, "success");
-      await loadCompanies(result.ticker, result.period_label);
-      $("#ticker-select").value = result.ticker;
-      state.ticker = result.ticker;
-      populatePeriods(result.period_label);
-      loadActiveTab();
+      const sections = Array.isArray(result.sections) ? result.sections.join(", ") : "";
+      toast(`Indexed ${result.ticker} ${result.period_label} (${result.doc_type})${sections ? " — " + sections : ""}`, "success");
+      try {
+        await loadCompanies(result.ticker, result.period_label);
+        const sel = document.getElementById("ticker-select");
+        if (sel) { sel.value = result.ticker; state.ticker = result.ticker; }
+        populatePeriods(result.period_label);
+        loadActiveTab();
+      } catch (uiErr) {
+        console.warn("Post-upload UI refresh error (non-fatal):", uiErr);
+      }
       fileInput.value = "";
       dropzoneText.textContent = "Drag & drop a file here, or click to browse";
     } catch (err) {
-      toast(`Upload failed: ${err.message}`, "error");
+      console.error("Upload error:", err);
+      toast(`Upload failed: ${err?.message || String(err)}`, "error");
     } finally {
       btn.disabled = false;
       btn.textContent = "Upload & Analyze";
