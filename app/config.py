@@ -14,7 +14,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 OPENROUTER_BASE_URL = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
 OPENROUTER_LLM_MODEL = os.getenv("OPENROUTER_LLM_MODEL", "nvidia/nemotron-nano-9b-v2:free")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-en-v1.5")
 CHROMA_PERSIST_DIR = str(BASE_DIR / os.getenv("CHROMA_PERSIST_DIR", "data/chroma_db"))
 SAMPLE_DATA_DIR = BASE_DIR / os.getenv("SAMPLE_DATA_DIR", "data/sample_filings")
 
