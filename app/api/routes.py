@@ -1,9 +1,8 @@
 """FastAPI API router — all REST endpoints for the AI Financial Document Analyst."""
 import shutil
-import threading
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app import config
@@ -87,17 +86,8 @@ class UploadResponse(BaseModel):
     sections: list[str]
 
 
-def _index_in_background(parsed) -> None:
-    """Run add_document (embedding + vectorstore indexing) in a background thread."""
-    try:
-        add_document(parsed)
-    except Exception:
-        pass
-
-
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
-    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     ticker: str = Form(...),
     fiscal_year: int = Form(...),
@@ -126,16 +116,19 @@ async def upload_document(
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=f"Could not parse document: {exc}") from exc
 
-    # Register in the document list immediately so it shows up in /companies.
-    # Vectorstore indexing (embedding) runs in the background to avoid timeout.
-    from app.state import _documents, get_documents
+    # Register in the in-memory document list and clear stale LLM caches.
+    # Vectorstore indexing is intentionally skipped here to avoid OOM on free
+    # tier — the vectorstore rebuilds automatically on the next /rag/query call.
     docs = get_documents()
     docs[:] = [
         d for d in docs
         if not (d.ticker == parsed.ticker and d.period_label == parsed.period_label and d.doc_type == parsed.doc_type)
     ]
     docs.append(parsed)
-    background_tasks.add_task(_index_in_background, parsed)
+    get_metrics.cache_clear()
+    get_tone.cache_clear()
+    get_risks.cache_clear()
+    get_or_build_vectorstore.cache_clear()
 
     return UploadResponse(
         company=parsed.company,
