@@ -8,7 +8,6 @@ import time
 from functools import lru_cache
 from typing import Any, TypeVar
 
-from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
@@ -30,11 +29,6 @@ def get_llm(temperature: float = config.LLM_TEMPERATURE_EXTRACTION) -> ChatOpenA
         timeout=120,
     )
 
-
-@lru_cache(maxsize=1)
-def get_embeddings() -> FastEmbedEmbeddings:
-    """Return a cached lightweight ONNX embedding model (no torch dependency)."""
-    return FastEmbedEmbeddings(model_name=config.EMBEDDING_MODEL)
 
 
 def invoke_structured(llm: ChatOpenAI, schema: type[T], prompt: str, retries: int = 5) -> T:

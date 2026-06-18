@@ -26,7 +26,7 @@ from app.models.schemas import (
     ToneComparison,
 )
 from app.rag.retriever import format_context, retrieve
-from app.state import add_document, get_documents, get_metrics, get_or_build_vectorstore, get_risks, get_tone
+from app.state import add_document, get_documents, get_metrics, get_risks, get_tone
 
 router = APIRouter()
 
@@ -128,7 +128,6 @@ async def upload_document(
     get_metrics.cache_clear()
     get_tone.cache_clear()
     get_risks.cache_clear()
-    get_or_build_vectorstore.cache_clear()
 
     return UploadResponse(
         company=parsed.company,
@@ -265,9 +264,8 @@ class RagQueryResponse(BaseModel):
 
 @router.post("/rag/query", response_model=RagQueryResponse)
 def rag_query(request: RagQueryRequest) -> RagQueryResponse:
-    vectorstore = get_or_build_vectorstore()
     documents = retrieve(
-        vectorstore,
+        None,  # vectorstore not used — BM25 retrieval reads from in-memory docs
         request.query,
         k=request.k,
         ticker=request.ticker,
