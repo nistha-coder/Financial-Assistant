@@ -1,5 +1,4 @@
 """FastAPI entrypoint for the AI Financial Document Analyst."""
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -8,20 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes import router
 
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Pre-warm the embedding model and vector store so the first upload
-    # doesn't trigger a cold ONNX model download mid-request.
-    from app.llm import get_embeddings
-    from app.state import get_or_build_vectorstore
-    get_embeddings()
-    get_or_build_vectorstore()
-    yield
-
-
 app = FastAPI(
-    lifespan=lifespan,
     title="AI Financial Document Analyst",
     description=(
         "Analyzes 10-K/10-Q filings and earnings call transcripts: financial "

@@ -1,8 +1,9 @@
 """FastAPI API router — all REST endpoints for the AI Financial Document Analyst."""
 import shutil
+import threading
 from pathlib import Path
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, File, Form, HTTPException, Query, UploadFile
 from pydantic import BaseModel
 
 from app import config
@@ -86,8 +87,17 @@ class UploadResponse(BaseModel):
     sections: list[str]
 
 
+def _index_in_background(parsed) -> None:
+    """Run add_document (embedding + vectorstore indexing) in a background thread."""
+    try:
+        add_document(parsed)
+    except Exception:
+        pass
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_document(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     ticker: str = Form(...),
     fiscal_year: int = Form(...),
@@ -116,7 +126,16 @@ async def upload_document(
         dest.unlink(missing_ok=True)
         raise HTTPException(status_code=422, detail=f"Could not parse document: {exc}") from exc
 
-    add_document(parsed)
+    # Register in the document list immediately so it shows up in /companies.
+    # Vectorstore indexing (embedding) runs in the background to avoid timeout.
+    from app.state import _documents, get_documents
+    docs = get_documents()
+    docs[:] = [
+        d for d in docs
+        if not (d.ticker == parsed.ticker and d.period_label == parsed.period_label and d.doc_type == parsed.doc_type)
+    ]
+    docs.append(parsed)
+    background_tasks.add_task(_index_in_background, parsed)
 
     return UploadResponse(
         company=parsed.company,
