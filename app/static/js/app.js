@@ -1,386 +1,486 @@
-/* ══════════════════════════════════════════════════════════════
-   FinAnalyst AI — Dashboard JavaScript
-   ══════════════════════════════════════════════════════════════ */
-
 const API = "/api";
-let currentTicker = "";
-let currentPeriod = "";
-let metricsChartInstance = null;
-let benchmarkChartInstance = null;
 
-// ── Initialisation ──────────────────────────────────────────
-document.addEventListener("DOMContentLoaded", () => {
-  loadDocuments();
-  setupUploadDragDrop();
-});
+const state = {
+  companies: [],
+  ticker: null,
+  period: null,
+  benchmarkSelected: new Set(),
+  memoSelected: new Set(),
+  chart: null,
+};
 
-// ── Tab Switching ───────────────────────────────────────────
-function switchTab(tabId) {
-  document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
-  document.querySelector(`[data-tab="${tabId}"]`).classList.add("active");
-  document.querySelectorAll(".panel").forEach(p => p.classList.remove("active"));
-  document.getElementById(`panel-${tabId}`).classList.add("active");
+// ---------------- Helpers ----------------
+function $(sel) { return document.querySelector(sel); }
+function $all(sel) { return Array.from(document.querySelectorAll(sel)); }
+
+function fmtNum(value, opts = {}) {
+  if (value === null || value === undefined) return "—";
+  const { suffix = "", decimals = 1 } = opts;
+  return Number(value).toLocaleString(undefined, { maximumFractionDigits: decimals, minimumFractionDigits: 0 }) + suffix;
 }
 
-// ── Toast Notifications ────────────────────────────────────
-function showToast(message, type = "info") {
-  const container = document.getElementById("toastContainer");
-  const toast = document.createElement("div");
-  toast.className = `toast ${type}`;
-  const icons = { success: "✓", error: "✕", info: "ℹ" };
-  toast.innerHTML = `<span style="font-size:1.1rem">${icons[type] || "ℹ"}</span><span>${message}</span>`;
-  container.appendChild(toast);
-  setTimeout(() => { toast.style.animation = "slideOut 0.3s ease forwards"; setTimeout(() => toast.remove(), 300); }, 4000);
+function toast(message, type = "success") {
+  const container = $("#toast-container");
+  const el = document.createElement("div");
+  el.className = `toast ${type}`;
+  el.textContent = message;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 5000);
 }
 
-// ── Loading Overlay ────────────────────────────────────────
-function showLoading(text = "Processing…") {
-  document.getElementById("loadingText").textContent = text;
-  document.getElementById("loadingOverlay").classList.add("active");
-  setStatus("Processing…");
+function showSpinner(container) {
+  container.innerHTML = '<div class="spinner"></div>';
 }
-function hideLoading() {
-  document.getElementById("loadingOverlay").classList.remove("active");
-  setStatus("Ready");
-}
-function setStatus(text) { document.getElementById("statusText").textContent = text; }
 
-// ── API Helper ─────────────────────────────────────────────
-async function apiFetch(url, options = {}) {
-  const resp = await fetch(url, options);
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
-    throw new Error(err.detail || `HTTP ${resp.status}`);
+function showSkeleton(container, lines = 4) {
+  container.innerHTML = Array.from({ length: lines }).map(() => '<div class="skeleton"></div>').join("");
+}
+
+async function api(path, options = {}) {
+  const res = await fetch(`${API}${path}`, options);
+  if (!res.ok) {
+    let detail = res.statusText;
+    try {
+      const body = await res.json();
+      detail = body.detail || JSON.stringify(body);
+    } catch (_) { /* ignore */ }
+    throw new Error(detail);
   }
-  return resp.json();
+  return res.json();
 }
 
-// ── Load Documents & Populate Selectors ────────────────────
-async function loadDocuments() {
+// ---------------- Companies / period selectors ----------------
+async function loadCompanies(selectTicker, selectPeriod) {
+  const tickerSelect = $("#ticker-select");
+  const periodSelect = $("#period-select");
   try {
-    const docs = await apiFetch(`${API}/documents`);
-    const companyMap = {};
-    const periods = new Set();
-    docs.forEach(d => {
-      companyMap[d.ticker] = d.company;
-      periods.add(d.period_label);
-    });
-
-    const cs = document.getElementById("companySelect");
-    cs.innerHTML = '<option value="">— Select Company —</option>';
-    Object.entries(companyMap).forEach(([ticker, company]) => {
-      cs.innerHTML += `<option value="${ticker}">${company} (${ticker})</option>`;
-    });
-
-    const ps = document.getElementById("periodSelect");
-    const pp = document.getElementById("priorPeriodSelect");
-    ps.innerHTML = '<option value="">— Select Period —</option>';
-    pp.innerHTML = '<option value="">— Auto (prior year) —</option>';
-    [...periods].sort().reverse().forEach(p => {
-      ps.innerHTML += `<option value="${p}">${p}</option>`;
-      pp.innerHTML += `<option value="${p}">${p}</option>`;
-    });
-
-    if (docs.length > 0) showToast(`${docs.length} documents loaded`, "success");
-    else showToast("No documents found — upload some filings", "info");
+    state.companies = await api("/companies");
   } catch (e) {
-    showToast(`Failed to load documents: ${e.message}`, "error");
+    toast(`Failed to load companies: ${e.message}`, "error");
+    return;
   }
+
+  const tickers = [...new Set(state.companies.map((c) => c.ticker))];
+  tickerSelect.innerHTML = tickers.map((t) => `<option value="${t}">${t}</option>`).join("");
+
+  const wantTicker = selectTicker && tickers.includes(selectTicker) ? selectTicker : tickers[0];
+  tickerSelect.value = wantTicker;
+  state.ticker = wantTicker;
+  populatePeriods(selectPeriod);
 }
 
-// ── Handle Analyze Button ──────────────────────────────────
-function handleLoad() {
-  currentTicker = document.getElementById("companySelect").value;
-  currentPeriod = document.getElementById("periodSelect").value;
-  if (!currentTicker || !currentPeriod) { showToast("Select a company and period first", "error"); return; }
-  const activeTab = document.querySelector(".tab-btn.active").dataset.tab;
-  const loaders = { metrics: loadMetrics, compare: loadCompare, tone: loadTone, risks: loadRisks, benchmark: loadBenchmark };
-  (loaders[activeTab] || loadMetrics)();
+function populatePeriods(selectPeriod) {
+  const periodSelect = $("#period-select");
+  const periods = state.companies
+    .filter((c) => c.ticker === state.ticker)
+    .map((c) => c.period_label)
+    .sort();
+  periodSelect.innerHTML = periods.map((p) => `<option value="${p}">${p}</option>`).join("");
+  const want = selectPeriod && periods.includes(selectPeriod) ? selectPeriod : periods[periods.length - 1];
+  periodSelect.value = want;
+  state.period = want;
 }
 
-// ── Metrics ────────────────────────────────────────────────
+// ---------------- Tabs ----------------
+function setupTabs() {
+  $all(".tab").forEach((tab) => {
+    tab.addEventListener("click", () => {
+      $all(".tab").forEach((t) => t.classList.remove("active"));
+      $all(".panel").forEach((p) => p.classList.remove("active"));
+      tab.classList.add("active");
+      $(`#panel-${tab.dataset.tab}`).classList.add("active");
+      loadActiveTab();
+    });
+  });
+}
+
+function activeTab() {
+  return $(".tab.active")?.dataset.tab;
+}
+
+function loadActiveTab() {
+  const tab = activeTab();
+  if (tab === "metrics") loadMetrics();
+  if (tab === "comparison") loadComparison();
+  if (tab === "tone") loadTone();
+  if (tab === "risks") loadRisks();
+  if (tab === "benchmark") renderBenchmarkChips();
+  if (tab === "memo") renderMemoChips();
+}
+
+// ---------------- Metrics ----------------
+const METRIC_LABELS = {
+  revenue: "Revenue ($M)",
+  gross_profit: "Gross Profit ($M)",
+  operating_income: "Operating Income ($M)",
+  ebitda: "EBITDA ($M)",
+  net_income: "Net Income ($M)",
+  gross_margin_pct: "Gross Margin",
+  operating_margin_pct: "Operating Margin",
+  net_margin_pct: "Net Margin",
+  ebitda_margin_pct: "EBITDA Margin",
+  operating_cash_flow: "Operating Cash Flow ($M)",
+  free_cash_flow: "Free Cash Flow ($M)",
+  capex: "Capex ($M)",
+  total_debt: "Total Debt ($M)",
+  cash_and_equivalents: "Cash & Equivalents ($M)",
+};
+
 async function loadMetrics() {
-  if (!currentTicker || !currentPeriod) return;
-  showLoading("Extracting metrics…");
+  const container = $("#metrics-content");
+  if (!state.ticker || !state.period) return;
+  showSkeleton(container, 6);
   try {
-    const data = await apiFetch(`${API}/metrics?ticker=${currentTicker}&period=${currentPeriod}`);
-    renderMetrics(data);
-    showToast("Metrics loaded", "success");
-  } catch (e) { showToast(`Metrics error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
-}
+    const data = await api(`/metrics/${state.ticker}/${state.period}`);
+    let html = '<div class="metric-grid">';
+    for (const [key, label] of Object.entries(METRIC_LABELS)) {
+      const val = data[key];
+      const suffix = key.endsWith("_pct") ? "%" : "";
+      html += `<div class="metric-tile"><div class="label">${label}</div><div class="value">${fmtNum(val, { suffix })}</div></div>`;
+    }
+    html += "</div>";
 
-function renderMetrics(data) {
-  const grid = document.getElementById("metricsGrid");
-  const fields = [
-    { key: "revenue", label: "Revenue", unit: `${data.currency} ${data.unit}` },
-    { key: "gross_profit", label: "Gross Profit", unit: `${data.currency} ${data.unit}` },
-    { key: "operating_income", label: "Operating Income", unit: `${data.currency} ${data.unit}` },
-    { key: "ebitda", label: "EBITDA", unit: `${data.currency} ${data.unit}` },
-    { key: "net_income", label: "Net Income", unit: `${data.currency} ${data.unit}` },
-    { key: "gross_margin_pct", label: "Gross Margin", unit: "%" },
-    { key: "operating_margin_pct", label: "Operating Margin", unit: "%" },
-    { key: "net_margin_pct", label: "Net Margin", unit: "%" },
-    { key: "ebitda_margin_pct", label: "EBITDA Margin", unit: "%" },
-    { key: "operating_cash_flow", label: "Operating Cash Flow", unit: `${data.currency} ${data.unit}` },
-    { key: "free_cash_flow", label: "Free Cash Flow", unit: `${data.currency} ${data.unit}` },
-    { key: "total_debt", label: "Total Debt", unit: `${data.currency} ${data.unit}` },
-  ];
-
-  grid.innerHTML = fields.filter(f => data[f.key] != null).map(f =>
-    `<div class="metric-card">
-       <div class="metric-label">${f.label}</div>
-       <div class="metric-value">${formatNumber(data[f.key], f.unit === "%")}</div>
-       <div class="metric-unit">${f.unit}</div>
-     </div>`
-  ).join("");
-
-  renderMetricsChart(data, fields);
-}
-
-function renderMetricsChart(data, fields) {
-  const chartFields = fields.filter(f => !f.unit.includes("%") && data[f.key] != null);
-  const ctx = document.getElementById("metricsChart").getContext("2d");
-  if (metricsChartInstance) metricsChartInstance.destroy();
-  metricsChartInstance = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels: chartFields.map(f => f.label),
-      datasets: [{ label: `${data.ticker} ${data.period_label}`, data: chartFields.map(f => data[f.key]),
-        backgroundColor: "rgba(99,102,241,0.5)", borderColor: "#6366f1", borderWidth: 1, borderRadius: 6 }]
-    },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: "#94a3b8" } } },
-      scales: { x: { ticks: { color: "#64748b" }, grid: { color: "rgba(255,255,255,0.04)" } },
-               y: { ticks: { color: "#64748b" }, grid: { color: "rgba(255,255,255,0.04)" } } } }
-  });
-}
-
-// ── Compare ────────────────────────────────────────────────
-async function loadCompare() {
-  if (!currentTicker || !currentPeriod) { showToast("Select company and period first", "error"); return; }
-  let priorPeriod = document.getElementById("priorPeriodSelect").value;
-  if (!priorPeriod) {
-    const match = currentPeriod.match(/FY(\d{4})/);
-    priorPeriod = match ? `FY${parseInt(match[1]) - 1}` : "";
+    if (data.guidance_revenue_low || data.guidance_eps_low) {
+      html += `<div class="memo-section"><h3>Forward Guidance</h3><div class="metric-grid">`;
+      html += `<div class="metric-tile"><div class="label">Revenue Guidance ($M)</div><div class="value">${fmtNum(data.guidance_revenue_low)} – ${fmtNum(data.guidance_revenue_high)}</div></div>`;
+      html += `<div class="metric-tile"><div class="label">EPS Guidance ($)</div><div class="value">${fmtNum(data.guidance_eps_low, { decimals: 2 })} – ${fmtNum(data.guidance_eps_high, { decimals: 2 })}</div></div>`;
+      html += `</div>`;
+      if (data.guidance_notes) html += `<p class="muted" style="margin-top:8px;">${data.guidance_notes}</p>`;
+      html += `</div>`;
+    }
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
   }
-  if (!priorPeriod) { showToast("Could not determine prior period", "error"); return; }
-  showLoading("Comparing periods…");
+}
+
+// ---------------- Comparison ----------------
+async function loadComparison() {
+  const container = $("#comparison-content");
+  if (!state.ticker || !state.period) return;
+  showSkeleton(container, 6);
   try {
-    const data = await apiFetch(`${API}/compare?ticker=${currentTicker}&current_period=${currentPeriod}&prior_period=${priorPeriod}`);
-    renderCompare(data);
-    showToast("Comparison ready", "success");
-  } catch (e) { showToast(`Compare error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const data = await api(`/metrics/${state.ticker}/${state.period}/comparison`);
+    let html = `<table><thead><tr><th>Metric</th><th>${data.prior_period}</th><th>${data.current_period}</th><th>Change</th><th>% Change</th></tr></thead><tbody>`;
+    for (const d of data.deltas) {
+      const label = METRIC_LABELS[d.metric] || d.metric;
+      const cls = d.pct_change > 0 ? "delta-pos" : d.pct_change < 0 ? "delta-neg" : "delta-zero";
+      const arrow = d.pct_change > 0 ? "▲" : d.pct_change < 0 ? "▼" : "•";
+      html += `<tr><td>${label}</td><td>${fmtNum(d.prior_value)}</td><td>${fmtNum(d.current_value)}</td>`;
+      html += `<td class="${cls}">${fmtNum(d.absolute_change)}</td>`;
+      html += `<td class="${cls}">${arrow} ${fmtNum(d.pct_change, { suffix: "%" })}</td></tr>`;
+    }
+    html += "</tbody></table>";
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
+  }
 }
 
-function renderCompare(data) {
-  const el = document.getElementById("compareContent");
-  const rows = data.deltas.filter(d => d.current_value != null || d.prior_value != null).map(d => {
-    const cls = d.pct_change > 0 ? "positive" : d.pct_change < 0 ? "negative" : "";
-    return `<tr><td>${formatMetricName(d.metric)}</td><td>${fmtVal(d.prior_value)}</td>
-      <td>${fmtVal(d.current_value)}</td><td>${fmtVal(d.absolute_change)}</td>
-      <td class="${cls}">${d.pct_change != null ? (d.pct_change > 0 ? "+" : "") + d.pct_change.toFixed(1) + "%" : "—"}</td></tr>`;
-  }).join("");
-  el.innerHTML = `<table class="data-table"><thead><tr><th>Metric</th><th>${data.prior_period}</th>
-    <th>${data.current_period}</th><th>Change</th><th>% Change</th></tr></thead><tbody>${rows}</tbody></table>`;
-}
-
-// ── Tone ───────────────────────────────────────────────────
+// ---------------- Tone ----------------
 async function loadTone() {
-  if (!currentTicker || !currentPeriod) return;
-  showLoading("Analyzing management tone…");
+  const container = $("#tone-content");
+  if (!state.ticker || !state.period) return;
+  showSkeleton(container, 5);
   try {
-    const data = await apiFetch(`${API}/tone?ticker=${currentTicker}&period=${currentPeriod}`);
-    renderTone(data);
-    showToast("Tone analysis complete", "success");
-  } catch (e) { showToast(`Tone error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const tone = await api(`/tone/${state.ticker}/${state.period}`);
+    let html = `<div class="badge badge-${tone.sentiment}">${tone.sentiment}</div>`;
+    html += `<div class="score-bar"><div class="score-bar-fill" style="width:${tone.confidence_score * 100}%"></div></div>`;
+    html += `<p class="muted">Confidence score: ${(tone.confidence_score * 100).toFixed(0)}/100</p>`;
+    html += `<p>${tone.summary}</p>`;
+    if (tone.confidence_phrases?.length) {
+      html += `<div class="memo-section"><h3>Confidence Language</h3><ul class="quote-list">${tone.confidence_phrases.map((p) => `<li>"${p}"</li>`).join("")}</ul></div>`;
+    }
+    if (tone.hedging_phrases?.length) {
+      html += `<div class="memo-section"><h3>Hedging / Cautious Language</h3><ul class="quote-list">${tone.hedging_phrases.map((p) => `<li>"${p}"</li>`).join("")}</ul></div>`;
+    }
+    container.innerHTML = html;
+
+    // try the comparison too, append if available
+    try {
+      const cmp = await api(`/tone/${state.ticker}/${state.period}/comparison`);
+      const extra = document.createElement("div");
+      extra.className = "memo-section";
+      extra.innerHTML = `<h3>Tone Shift vs ${cmp.prior_period}</h3><div class="badge badge-${cmp.tone_shift}">${cmp.tone_shift.replace("_", " ")}</div><p class="muted" style="margin-top:8px;">${cmp.explanation}</p>`;
+      container.appendChild(extra);
+    } catch (_) { /* prior period may not exist or LLM unavailable */ }
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
+  }
 }
 
-function renderTone(data) {
-  const el = document.getElementById("toneContent");
-  const pct = Math.round(data.confidence_score * 100);
-  const color = data.sentiment === "confident" ? "var(--green)" : data.sentiment === "cautious" ? "var(--red)" : "var(--amber)";
-  const hedging = data.hedging_phrases.map(p => `<span class="phrase-tag">"${p}"</span>`).join("");
-  const confidence = data.confidence_phrases.map(p => `<span class="phrase-tag">"${p}"</span>`).join("");
-  el.innerHTML = `
-    <div class="tone-card">
-      <div class="tone-header">
-        <span class="tone-badge ${data.sentiment}">${data.sentiment}</span>
-        <div class="score-bar"><div class="score-fill" style="width:${pct}%;background:${color}"></div></div>
-        <span class="score-label">${pct}%</span>
-      </div>
-      <p style="color:var(--text-secondary);font-size:0.9rem;line-height:1.7">${data.summary}</p>
-      ${hedging ? `<div class="phrases-section"><h4>⚠ Hedging Phrases</h4>${hedging}</div>` : ""}
-      ${confidence ? `<div class="phrases-section"><h4>✓ Confidence Phrases</h4>${confidence}</div>` : ""}
-    </div>`;
-}
-
-// ── Risks ──────────────────────────────────────────────────
+// ---------------- Risks ----------------
 async function loadRisks() {
-  if (!currentTicker || !currentPeriod) return;
-  showLoading("Extracting risk factors…");
+  const container = $("#risks-content");
+  if (!state.ticker || !state.period) return;
+  showSkeleton(container, 5);
   try {
-    const data = await apiFetch(`${API}/risks?ticker=${currentTicker}&period=${currentPeriod}`);
-    renderRisks(data);
-    showToast(`${data.risks.length} risk factors extracted`, "success");
-  } catch (e) { showToast(`Risks error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const risks = await api(`/risks/${state.ticker}/${state.period}`);
+    let comparison = null;
+    try {
+      comparison = await api(`/risks/${state.ticker}/${state.period}/comparison`);
+    } catch (_) { /* no prior period */ }
+
+    const newTitles = new Set((comparison?.new_risks || []).map((r) => r.title));
+    const escalatedTitles = new Set((comparison?.escalated_risks || []).map((r) => r.title));
+
+    let html = "";
+    if (comparison) {
+      html += `<div class="chip-row">`;
+      html += `<span class="muted">vs ${comparison.prior_period}:</span>`;
+      html += `<span class="risk-tag risk-tag-new">${comparison.new_risks.length} new</span>`;
+      html += `<span class="risk-tag risk-tag-escalated">${comparison.escalated_risks.length} escalated</span>`;
+      html += `<span class="risk-tag risk-tag-removed">${comparison.removed_risks.length} removed</span>`;
+      html += `</div>`;
+    }
+
+    for (const risk of risks.risks) {
+      let tag = "";
+      if (newTitles.has(risk.title)) tag = '<span class="risk-tag risk-tag-new">New</span>';
+      else if (escalatedTitles.has(risk.title)) tag = '<span class="risk-tag risk-tag-escalated">Escalated</span>';
+      html += `<div class="risk-card">`;
+      html += `<div class="risk-title">${risk.title} ${tag}<span class="badge badge-${risk.severity}">${risk.severity}</span><span class="muted" style="font-weight:400;">${risk.category}</span></div>`;
+      html += `<div class="risk-desc">${risk.description}</div>`;
+      html += `</div>`;
+    }
+    container.innerHTML = html || '<p class="muted">No risk factors found.</p>';
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
+  }
 }
 
-function renderRisks(data) {
-  const el = document.getElementById("risksContent");
-  if (!data.risks.length) { el.innerHTML = '<div class="empty-state"><p>No risk factors found</p></div>'; return; }
-  el.innerHTML = data.risks.map(r =>
-    `<div class="risk-card ${r.severity}">
-       <div class="risk-title">${r.title}</div>
-       <div class="risk-meta">
-         <span class="risk-tag">${r.category}</span>
-         <span class="risk-tag" style="color:${r.severity === "high" ? "var(--red)" : r.severity === "medium" ? "var(--amber)" : "var(--green)"}">${r.severity.toUpperCase()}</span>
-       </div>
-       <div class="risk-desc">${r.description}</div>
-     </div>`
-  ).join("");
-}
-
-// ── Benchmark ──────────────────────────────────────────────
-async function loadBenchmark() {
-  const tickers = document.getElementById("benchmarkTickers").value || currentTicker;
-  if (!tickers || !currentPeriod) { showToast("Enter tickers and select a period", "error"); return; }
-  showLoading("Building benchmark…");
-  try {
-    const data = await apiFetch(`${API}/benchmark?tickers=${tickers}&period=${currentPeriod}`);
-    renderBenchmark(data);
-    showToast("Benchmark table ready", "success");
-  } catch (e) { showToast(`Benchmark error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
-}
-
-function renderBenchmark(data) {
-  const el = document.getElementById("benchmarkContent");
-  if (!data.rows.length) { el.innerHTML = '<div class="empty-state"><p>No benchmark data</p></div>'; return; }
-  const headers = ["Company", "Ticker", "Revenue", "Rev Growth %", "EBITDA Margin %", "Op Margin %", "Net Margin %", "CapEx % Rev", "Debt/EBITDA"];
-  const rows = data.rows.map(r =>
-    `<tr><td>${r.company}</td><td>${r.ticker}</td><td>${fmtVal(r.revenue)}</td>
-     <td>${fmtVal(r.revenue_growth_yoy_pct)}</td><td>${fmtVal(r.ebitda_margin_pct)}</td>
-     <td>${fmtVal(r.operating_margin_pct)}</td><td>${fmtVal(r.net_margin_pct)}</td>
-     <td>${fmtVal(r.capex_pct_of_revenue)}</td><td>${fmtVal(r.debt_to_ebitda)}</td></tr>`
-  ).join("");
-  el.innerHTML = `<table class="data-table"><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows}</tbody></table>`;
-  renderBenchmarkChart(data);
-}
-
-function renderBenchmarkChart(data) {
-  const ctx = document.getElementById("benchmarkChart").getContext("2d");
-  if (benchmarkChartInstance) benchmarkChartInstance.destroy();
-  const labels = data.rows.map(r => r.ticker);
-  const colors = ["rgba(99,102,241,0.6)", "rgba(34,211,238,0.6)", "rgba(52,211,153,0.6)", "rgba(248,113,113,0.6)", "rgba(251,191,36,0.6)"];
-  const datasets = [
-    { label: "EBITDA Margin %", data: data.rows.map(r => r.ebitda_margin_pct) },
-    { label: "Op Margin %", data: data.rows.map(r => r.operating_margin_pct) },
-    { label: "Net Margin %", data: data.rows.map(r => r.net_margin_pct) },
-  ].map((ds, i) => ({ ...ds, backgroundColor: colors[i], borderColor: colors[i].replace("0.6", "1"), borderWidth: 1, borderRadius: 4 }));
-  benchmarkChartInstance = new Chart(ctx, {
-    type: "bar", data: { labels, datasets },
-    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: "#94a3b8" } } },
-      scales: { x: { ticks: { color: "#64748b" }, grid: { color: "rgba(255,255,255,0.04)" } },
-               y: { ticks: { color: "#64748b" }, grid: { color: "rgba(255,255,255,0.04)" } } } }
+// ---------------- Benchmark ----------------
+function renderBenchmarkChips() {
+  const row = $("#benchmark-tickers");
+  const tickers = [...new Set(state.companies.map((c) => c.ticker))];
+  if (state.benchmarkSelected.size === 0) tickers.forEach((t) => state.benchmarkSelected.add(t));
+  row.innerHTML = tickers.map((t) => `<div class="chip ${state.benchmarkSelected.has(t) ? "selected" : ""}" data-ticker="${t}">${t}</div>`).join("");
+  $all("#benchmark-tickers .chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const t = chip.dataset.ticker;
+      if (state.benchmarkSelected.has(t)) state.benchmarkSelected.delete(t);
+      else state.benchmarkSelected.add(t);
+      chip.classList.toggle("selected");
+    });
   });
 }
 
-// ── Memo ───────────────────────────────────────────────────
-async function generateMemo() {
-  if (!currentTicker || !currentPeriod) { showToast("Select company and period first", "error"); return; }
-  const peers = document.getElementById("memoPeers").value;
-  const url = `${API}/memo?ticker=${currentTicker}&period=${currentPeriod}${peers ? "&peers=" + peers : ""}`;
-  showLoading("Generating investment memo (this may take a moment)…");
+async function loadBenchmark() {
+  const container = $("#benchmark-content");
+  if (!state.period) return;
+  const tickers = [...state.benchmarkSelected];
+  if (tickers.length === 0) {
+    toast("Select at least one ticker", "error");
+    return;
+  }
+  showSkeleton(container, 4);
   try {
-    const data = await apiFetch(url, { method: "POST" });
-    renderMemo(data);
-    showToast("Investment memo generated", "success");
-  } catch (e) { showToast(`Memo error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const table = await api(`/benchmark/${state.period}?tickers=${tickers.join(",")}`);
+    let html = `<table><thead><tr><th>Company</th><th>Revenue ($M)</th><th>YoY Growth</th><th>EBITDA Margin</th><th>Op. Margin</th><th>Net Margin</th><th>Capex % Rev</th><th>Debt/EBITDA</th></tr></thead><tbody>`;
+    for (const row of table.rows) {
+      html += `<tr><td>${row.company}</td><td>${fmtNum(row.revenue)}</td><td>${fmtNum(row.revenue_growth_yoy_pct, { suffix: "%" })}</td>`;
+      html += `<td>${fmtNum(row.ebitda_margin_pct, { suffix: "%" })}</td><td>${fmtNum(row.operating_margin_pct, { suffix: "%" })}</td>`;
+      html += `<td>${fmtNum(row.net_margin_pct, { suffix: "%" })}</td><td>${fmtNum(row.capex_pct_of_revenue, { suffix: "%" })}</td>`;
+      html += `<td>${fmtNum(row.debt_to_ebitda, { decimals: 2 })}</td></tr>`;
+    }
+    html += "</tbody></table>";
+    container.innerHTML = html;
+    drawBenchmarkChart(table);
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
+  }
 }
 
-function renderMemo(data) {
-  const el = document.getElementById("memoContent");
-  const listHtml = (items) => items.map(i => `<li>${i}</li>`).join("");
-  el.innerHTML = `
-    <div class="memo-section"><h3>Company Overview</h3><p>${data.company_overview}</p></div>
-    <div class="memo-section"><h3>Financial Summary</h3><p>${data.financial_summary}</p></div>
-    <div class="memo-section"><h3>🐂 Bull Case</h3><ul>${listHtml(data.bull_case)}</ul></div>
-    <div class="memo-section"><h3>🐻 Bear Case</h3><ul>${listHtml(data.bear_case)}</ul></div>
-    <div class="memo-section"><h3>⚠ Key Risks</h3><ul>${listHtml(data.key_risks)}</ul></div>
-    <div class="memo-section"><h3>❓ Questions to Investigate</h3><ul>${listHtml(data.questions_to_investigate)}</ul></div>`;
+function drawBenchmarkChart(table) {
+  const ctx = document.getElementById("benchmark-chart");
+  const labels = table.rows.map((r) => r.ticker);
+  const datasets = [
+    { label: "EBITDA Margin %", data: table.rows.map((r) => r.ebitda_margin_pct), backgroundColor: "#7c5cff" },
+    { label: "Operating Margin %", data: table.rows.map((r) => r.operating_margin_pct), backgroundColor: "#29d3c8" },
+    { label: "Net Margin %", data: table.rows.map((r) => r.net_margin_pct), backgroundColor: "#ff6b9d" },
+  ];
+  if (state.chart) state.chart.destroy();
+  state.chart = new Chart(ctx, {
+    type: "bar",
+    data: { labels, datasets },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { labels: { color: "#e7e9f3" } } },
+      scales: {
+        x: { ticks: { color: "#9097b3" }, grid: { color: "rgba(255,255,255,0.05)" } },
+        y: { ticks: { color: "#9097b3" }, grid: { color: "rgba(255,255,255,0.05)" } },
+      },
+    },
+  });
 }
 
-// ── Ask AI ─────────────────────────────────────────────────
-async function askQuestion() {
-  const q = document.getElementById("askInput").value.trim();
-  if (!q) { showToast("Enter a question first", "error"); return; }
-  showLoading("Searching documents…");
+// ---------------- Memo ----------------
+function renderMemoChips() {
+  const row = $("#memo-tickers");
+  const tickers = [...new Set(state.companies.map((c) => c.ticker))].filter((t) => t !== state.ticker);
+  row.innerHTML = tickers.map((t) => `<div class="chip ${state.memoSelected.has(t) ? "selected" : ""}" data-ticker="${t}">${t}</div>`).join("");
+  $all("#memo-tickers .chip").forEach((chip) => {
+    chip.addEventListener("click", () => {
+      const t = chip.dataset.ticker;
+      if (state.memoSelected.has(t)) state.memoSelected.delete(t);
+      else state.memoSelected.add(t);
+      chip.classList.toggle("selected");
+    });
+  });
+}
+
+async function loadMemo() {
+  const container = $("#memo-content");
+  if (!state.ticker || !state.period) return;
+  showSpinner(container);
+  const peers = [...state.memoSelected].join(",");
+  const url = `/memo/${state.ticker}/${state.period}` + (peers ? `?peers=${peers}` : "");
   try {
-    const params = new URLSearchParams({ question: q });
-    if (currentTicker) params.append("ticker", currentTicker);
-    if (currentPeriod) params.append("period", currentPeriod);
-    const data = await apiFetch(`${API}/ask?${params}`);
-    renderAnswer(data);
-    showToast("Answer ready", "success");
-  } catch (e) { showToast(`Ask error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const memo = await api(url);
+    let html = `<div class="memo-section"><h3>Company Overview</h3><p>${memo.company_overview}</p></div>`;
+    html += `<div class="memo-section"><h3>Financial Summary</h3><p>${memo.financial_summary}</p></div>`;
+    html += `<div class="memo-section"><h3>🐂 Bull Case</h3><ul>${memo.bull_case.map((b) => `<li>${b}</li>`).join("")}</ul></div>`;
+    html += `<div class="memo-section"><h3>🐻 Bear Case</h3><ul>${memo.bear_case.map((b) => `<li>${b}</li>`).join("")}</ul></div>`;
+    html += `<div class="memo-section"><h3>Key Risks</h3><ul>${memo.key_risks.map((b) => `<li>${b}</li>`).join("")}</ul></div>`;
+    html += `<div class="memo-section"><h3>Questions to Investigate</h3><ul>${memo.questions_to_investigate.map((b) => `<li>${b}</li>`).join("")}</ul></div>`;
+    container.innerHTML = html;
+  } catch (e) {
+    container.innerHTML = `<p class="muted">${e.message}</p>`;
+  }
 }
 
-function renderAnswer(data) {
-  const el = document.getElementById("askContent");
-  const sources = data.sources && data.sources.length
-    ? `<div class="ask-sources"><h4>Sources</h4>${data.sources.map(s => `<span class="phrase-tag">${s.ticker} ${s.period_label} — ${s.section}</span>`).join("")}</div>` : "";
-  el.innerHTML = `<p style="white-space:pre-wrap">${data.answer}</p>${sources}`;
-}
+// ---------------- Chat ----------------
+async function sendChat(query) {
+  const log = $("#chat-log");
+  const userMsg = document.createElement("div");
+  userMsg.className = "chat-msg user";
+  userMsg.textContent = query;
+  log.appendChild(userMsg);
 
-// ── Upload ─────────────────────────────────────────────────
-function setupUploadDragDrop() {
-  const dz = document.getElementById("dropzone");
-  const fi = document.getElementById("fileInput");
-  ["dragenter", "dragover"].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.add("dragover"); }));
-  ["dragleave", "drop"].forEach(e => dz.addEventListener(e, ev => { ev.preventDefault(); dz.classList.remove("dragover"); }));
-  dz.addEventListener("drop", ev => { fi.files = ev.dataTransfer.files; showFileName(); });
-  fi.addEventListener("change", showFileName);
-}
+  const botMsg = document.createElement("div");
+  botMsg.className = "chat-msg bot";
+  botMsg.innerHTML = '<div class="spinner" style="margin:0 auto;"></div>';
+  log.appendChild(botMsg);
+  log.scrollTop = log.scrollHeight;
 
-function showFileName() {
-  const fi = document.getElementById("fileInput");
-  document.getElementById("fileName").textContent = fi.files.length ? `📄 ${fi.files[0].name}` : "";
-}
-
-async function uploadFile() {
-  const fi = document.getElementById("fileInput");
-  if (!fi.files.length) { showToast("Select a file first", "error"); return; }
-  const ticker = document.getElementById("uploadTicker").value.trim().toUpperCase();
-  const period = document.getElementById("uploadPeriod").value.trim();
-  const docType = document.getElementById("uploadDocType").value;
-  if (!ticker || !period) { showToast("Ticker and period are required", "error"); return; }
-  const fd = new FormData();
-  fd.append("file", fi.files[0]);
-  fd.append("ticker", ticker);
-  fd.append("period", period);
-  fd.append("doc_type", docType);
-  showLoading("Uploading and ingesting…");
   try {
-    const data = await apiFetch(`${API}/upload`, { method: "POST", body: fd });
-    showToast(data.message, "success");
-    document.getElementById("uploadForm").reset();
-    document.getElementById("fileName").textContent = "";
-    loadDocuments();
-  } catch (e) { showToast(`Upload error: ${e.message}`, "error"); }
-  finally { hideLoading(); }
+    const data = await api("/rag/query", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query,
+        ticker: state.ticker || null,
+        period_label: state.period || null,
+      }),
+    });
+    botMsg.innerHTML = `<div>${data.answer}</div>` + (data.sources?.length ? `<div class="sources">Sources: ${data.sources.join(" · ")}</div>` : "");
+  } catch (e) {
+    botMsg.innerHTML = `<div>${e.message}</div>`;
+  }
+  log.scrollTop = log.scrollHeight;
 }
 
-// ── Utilities ──────────────────────────────────────────────
-function formatNumber(val, isPct) {
-  if (val == null) return "—";
-  if (isPct) return val.toFixed(1);
-  if (Math.abs(val) >= 1000) return val.toLocaleString("en-US", { maximumFractionDigits: 0 });
-  return val.toLocaleString("en-US", { maximumFractionDigits: 2 });
+// ---------------- Upload ----------------
+function setupUpload() {
+  const dropzone = $("#dropzone");
+  const fileInput = $("#file-input");
+  const dropzoneText = $("#dropzone-text");
+
+  dropzone.addEventListener("click", () => fileInput.click());
+  dropzone.addEventListener("dragover", (e) => { e.preventDefault(); dropzone.classList.add("dragover"); });
+  dropzone.addEventListener("dragleave", () => dropzone.classList.remove("dragover"));
+  dropzone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    dropzone.classList.remove("dragover");
+    if (e.dataTransfer.files.length) {
+      fileInput.files = e.dataTransfer.files;
+      dropzoneText.textContent = e.dataTransfer.files[0].name;
+    }
+  });
+  fileInput.addEventListener("change", () => {
+    if (fileInput.files.length) dropzoneText.textContent = fileInput.files[0].name;
+  });
+
+  $("#upload-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const file = fileInput.files[0];
+    const ticker = $("#upload-ticker").value.trim();
+    const year = $("#upload-year").value;
+    const docType = $("#upload-doctype").value;
+    if (!file || !ticker || !year) {
+      toast("Please choose a file, ticker, and fiscal year", "error");
+      return;
+    }
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("ticker", ticker);
+    formData.append("fiscal_year", year);
+    formData.append("doc_type", docType);
+
+    const btn = $("#upload-btn");
+    btn.disabled = true;
+    btn.textContent = "Uploading…";
+    try {
+      const result = await api("/upload", { method: "POST", body: formData });
+      toast(`Indexed ${result.ticker} ${result.period_label} (${result.doc_type}) — sections: ${result.sections.join(", ")}`, "success");
+      await loadCompanies(result.ticker, result.period_label);
+      $("#ticker-select").value = result.ticker;
+      state.ticker = result.ticker;
+      populatePeriods(result.period_label);
+      loadActiveTab();
+      fileInput.value = "";
+      dropzoneText.textContent = "Drag & drop a file here, or click to browse";
+    } catch (err) {
+      toast(`Upload failed: ${err.message}`, "error");
+    } finally {
+      btn.disabled = false;
+      btn.textContent = "Upload & Analyze";
+    }
+  });
 }
-function fmtVal(v) { return v != null ? formatNumber(v) : "—"; }
-function formatMetricName(name) { return name.replace(/_/g, " ").replace(/\bpct\b/g, "%").replace(/\b\w/g, c => c.toUpperCase()); }
+
+// ---------------- Init ----------------
+function setupSelectors() {
+  $("#ticker-select").addEventListener("change", (e) => {
+    state.ticker = e.target.value;
+    populatePeriods();
+    loadActiveTab();
+  });
+  $("#period-select").addEventListener("change", (e) => {
+    state.period = e.target.value;
+    loadActiveTab();
+  });
+}
+
+function setupActions() {
+  document.body.addEventListener("click", (e) => {
+    const action = e.target.dataset?.action;
+    if (!action) return;
+    if (action === "load-metrics") loadMetrics();
+    if (action === "load-comparison") loadComparison();
+    if (action === "load-tone") loadTone();
+    if (action === "load-risks") loadRisks();
+    if (action === "load-benchmark") loadBenchmark();
+    if (action === "load-memo") loadMemo();
+  });
+
+  $("#chat-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const input = $("#chat-input");
+    const query = input.value.trim();
+    if (!query) return;
+    input.value = "";
+    sendChat(query);
+  });
+}
+
+(async function init() {
+  setupTabs();
+  setupSelectors();
+  setupActions();
+  setupUpload();
+  await loadCompanies();
+  loadActiveTab();
+})();

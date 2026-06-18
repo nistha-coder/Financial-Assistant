@@ -1,0 +1,208 @@
+{
+  "companies": {
+    "SOLR": {
+      "name": "Solstice Robotics, Inc.",
+      "ticker": "SOLR",
+      "periods": {
+        "FY2023": {
+          "revenue": 1240.5,
+          "gross_profit": 620.3,
+          "operating_income": 186.1,
+          "ebitda": 260.5,
+          "net_income": 130.3,
+          "gross_margin_pct": 50.0,
+          "operating_margin_pct": 15.0,
+          "ebitda_margin_pct": 21.0,
+          "net_margin_pct": 10.5,
+          "operating_cash_flow": 215.4,
+          "capex": 95.2,
+          "free_cash_flow": 120.2,
+          "total_debt": 450.0,
+          "cash_and_equivalents": 310.6,
+          "guidance_revenue_low": 1330.0,
+          "guidance_revenue_high": 1370.0,
+          "guidance_eps_low": 2.1,
+          "guidance_eps_high": 2.25,
+          "tone": "confident",
+          "risks": [
+            {
+              "title": "Supply Chain and Component Sourcing Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Customer Concentration Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Competition from Low-Cost Manufacturers Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Foreign Currency Exchange Rate Risk",
+              "severity": "low"
+            },
+            {
+              "title": "Cybersecurity and Data Protection Risk",
+              "severity": "medium"
+            }
+          ]
+        },
+        "FY2024": {
+          "revenue": 1395.8,
+          "gross_profit": 711.9,
+          "operating_income": 223.3,
+          "ebitda": 307.1,
+          "net_income": 167.5,
+          "gross_margin_pct": 51.0,
+          "operating_margin_pct": 16.0,
+          "ebitda_margin_pct": 22.0,
+          "net_margin_pct": 12.0,
+          "operating_cash_flow": 261.0,
+          "capex": 110.5,
+          "free_cash_flow": 150.5,
+          "total_debt": 400.0,
+          "cash_and_equivalents": 380.2,
+          "guidance_revenue_low": 1500.0,
+          "guidance_revenue_high": 1550.0,
+          "guidance_eps_low": 2.55,
+          "guidance_eps_high": 2.7,
+          "tone": "cautious",
+          "risks": [
+            {
+              "title": "Supply Chain and Component Sourcing Risk",
+              "severity": "high"
+            },
+            {
+              "title": "Customer Concentration Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Competition from Low-Cost Manufacturers Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Foreign Currency Exchange Rate Risk",
+              "severity": "low"
+            },
+            {
+              "title": "Cybersecurity and Data Protection Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Workplace Automation Regulation Risk",
+              "severity": "medium"
+            }
+          ],
+          "new_risk_titles": [
+            "Workplace Automation Regulation Risk"
+          ],
+          "escalated_risk_titles": [
+            "Supply Chain and Component Sourcing Risk"
+          ]
+        }
+      }
+    },
+    "VCLD": {
+      "name": "Vertex Cloud Systems, Inc.",
+      "ticker": "VCLD",
+      "periods": {
+        "FY2023": {
+          "revenue": 850.2,
+          "gross_profit": 612.1,
+          "operating_income": 76.5,
+          "ebitda": 127.5,
+          "net_income": 42.5,
+          "gross_margin_pct": 72.0,
+          "operating_margin_pct": 9.0,
+          "ebitda_margin_pct": 15.0,
+          "net_margin_pct": 5.0,
+          "operating_cash_flow": 140.3,
+          "capex": 35.1,
+          "free_cash_flow": 105.2,
+          "total_debt": 600.0,
+          "cash_and_equivalents": 250.4,
+          "guidance_revenue_low": 930.0,
+          "guidance_revenue_high": 960.0,
+          "guidance_eps_low": 0.55,
+          "guidance_eps_high": 0.62,
+          "tone": "confident",
+          "risks": [
+            {
+              "title": "Data Privacy and Regulatory Compliance Risk",
+              "severity": "high"
+            },
+            {
+              "title": "Customer Concentration Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Intense Competition in Cloud Software Market Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Talent Retention Risk",
+              "severity": "low"
+            },
+            {
+              "title": "Cybersecurity Breach Risk",
+              "severity": "high"
+            }
+          ]
+        },
+        "FY2024": {
+          "revenue": 1011.5,
+          "gross_profit": 738.4,
+          "operating_income": 111.3,
+          "ebitda": 172.0,
+          "net_income": 60.7,
+          "gross_margin_pct": 73.0,
+          "operating_margin_pct": 11.0,
+          "ebitda_margin_pct": 17.0,
+          "net_margin_pct": 6.0,
+          "operating_cash_flow": 175.6,
+          "capex": 50.6,
+          "free_cash_flow": 125.0,
+          "total_debt": 620.0,
+          "cash_and_equivalents": 300.8,
+          "guidance_revenue_low": 1180.0,
+          "guidance_revenue_high": 1220.0,
+          "guidance_eps_low": 0.78,
+          "guidance_eps_high": 0.85,
+          "tone": "confident",
+          "risks": [
+            {
+              "title": "Data Privacy and Regulatory Compliance Risk",
+              "severity": "high"
+            },
+            {
+              "title": "Customer Concentration Risk",
+              "severity": "medium"
+            },
+            {
+              "title": "Intense Competition in Cloud Software Market Risk",
+              "severity": "high"
+            },
+            {
+              "title": "Talent Retention Risk",
+              "severity": "low"
+            },
+            {
+              "title": "Cybersecurity Breach Risk",
+              "severity": "high"
+            },
+            {
+              "title": "Artificial Intelligence Regulation Risk",
+              "severity": "medium"
+            }
+          ],
+          "new_risk_titles": [
+            "Artificial Intelligence Regulation Risk"
+          ],
+          "escalated_risk_titles": [
+            "Intense Competition in Cloud Software Market Risk"
+          ]
+        }
+      }
+    }
+  }
+}
