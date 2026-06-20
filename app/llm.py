@@ -8,6 +8,7 @@ import time
 from functools import lru_cache
 from typing import Any, TypeVar
 
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 
@@ -30,6 +31,10 @@ def get_llm(temperature: float = config.LLM_TEMPERATURE_EXTRACTION) -> ChatOpenA
     )
 
 
+@lru_cache(maxsize=1)
+def get_embeddings() -> HuggingFaceEmbeddings:
+    """Return a cached local sentence-transformers embedding model."""
+    return HuggingFaceEmbeddings(model_name=config.EMBEDDING_MODEL)
 
 def invoke_structured(llm: ChatOpenAI, schema: type[T], prompt: str, retries: int = 5) -> T:
     """Invoke an LLM with a structured-output schema, retrying on transient
