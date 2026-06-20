@@ -36,7 +36,6 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     """Return a cached local sentence-transformers embedding model."""
     return HuggingFaceEmbeddings(model_name=config.EMBEDDING_MODEL)
 
-
 def invoke_structured(llm: ChatOpenAI, schema: type[T], prompt: str, retries: int = 5) -> T:
     """Invoke an LLM with a structured-output schema, retrying on transient
     provider errors (common with free-tier OpenRouter models)."""

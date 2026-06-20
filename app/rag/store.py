@@ -1,20 +1,13 @@
-"""Build and load the Chroma vector store used for retrieval-augmented analysis."""
-import shutil
-
-from langchain_chroma import Chroma
+"""Document chunking utilities for the RAG pipeline."""
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app import config
-from app.llm import get_embeddings
 from app.models.schemas import ParsedDocument
-
-COLLECTION_NAME = "financial_documents"
 
 
 def documents_to_chunks(parsed_docs: list[ParsedDocument]) -> list[Document]:
-    """Split every section of every parsed document into embeddable chunks,
-    carrying metadata needed for filtered retrieval (company, period, section type)."""
+    """Split every section of every parsed document into chunks for retrieval."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=config.CHUNK_SIZE,
         chunk_overlap=config.CHUNK_OVERLAP,
@@ -40,32 +33,3 @@ def documents_to_chunks(parsed_docs: list[ParsedDocument]) -> list[Document]:
                     )
                 )
     return chunks
-
-
-def build_vectorstore(
-    parsed_docs: list[ParsedDocument],
-    persist_dir: str | None = None,
-    reset: bool = True,
-) -> Chroma:
-    """Embed all document chunks and persist them to a Chroma collection."""
-    persist_dir = persist_dir or config.CHROMA_PERSIST_DIR
-    if reset:
-        shutil.rmtree(persist_dir, ignore_errors=True)
-
-    chunks = documents_to_chunks(parsed_docs)
-    return Chroma.from_documents(
-        documents=chunks,
-        embedding=get_embeddings(),
-        collection_name=COLLECTION_NAME,
-        persist_directory=persist_dir,
-    )
-
-
-def get_vectorstore(persist_dir: str | None = None) -> Chroma:
-    """Load an already-persisted Chroma collection."""
-    persist_dir = persist_dir or config.CHROMA_PERSIST_DIR
-    return Chroma(
-        collection_name=COLLECTION_NAME,
-        embedding_function=get_embeddings(),
-        persist_directory=persist_dir,
-    )

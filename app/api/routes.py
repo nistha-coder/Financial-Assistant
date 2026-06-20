@@ -1,312 +1,291 @@
-"""FastAPI API router — all REST endpoints for the AI Financial Document Analyst.
-
-Endpoints
----------
-POST /upload       – Upload a filing / transcript and ingest it
-GET  /documents    – List ingested documents
-GET  /metrics      – Extract financial metrics for a ticker/period
-GET  /compare      – Period-over-period (YoY) metric comparison
-GET  /tone         – Management tone / sentiment analysis
-GET  /risks        – Risk factor extraction
-GET  /benchmark    – Peer competitor benchmarking table
-POST /memo         – Generate an investment memo
-GET  /ask          – RAG-powered question answering
-"""
-from __future__ import annotations
-
+"""FastAPI API router — all REST endpoints for the AI Financial Document Analyst."""
 import shutil
-import tempfile
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from pydantic import BaseModel
 
 from app import config
-from app.analysis.tone import compare_tone
+from app.analysis.tone import analyze_tone, compare_tone
 from app.benchmarking.benchmark import build_benchmark_table
 from app.extraction.comparison import compute_metric_comparison
+from app.extraction.metrics import extract_financial_metrics
+from app.extraction.risks import compare_risk_factors, extract_risk_factors
 from app.ingestion.parser import parse_document
+from app.ingestion.pipeline import get_document
+from app.llm import get_llm
 from app.memo.generator import generate_investment_memo
-from app.rag.retriever import format_context, retrieve
-from app.state import (
-    add_document,
-    get_documents,
-    get_metrics,
-    get_or_build_vectorstore,
-    get_risks,
-    get_tone,
+from app.models.schemas import (
+    BenchmarkTable,
+    FinancialMetrics,
+    InvestmentMemo,
+    MetricComparison,
+    RiskComparison,
+    RiskFactorList,
+    ToneAnalysis,
+    ToneComparison,
 )
+from app.rag.retriever import format_context, retrieve
+from app.state import add_document, get_documents, get_metrics, get_risks, get_tone
 
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Helper
-# ---------------------------------------------------------------------------
-
-def _require_params(ticker: str | None, period: str | None) -> tuple[str, str]:
-    """Validate that both ticker and period query params are present."""
-    if not ticker or not period:
-        raise HTTPException(status_code=400, detail="Both 'ticker' and 'period' query parameters are required.")
-    return ticker, period
+UPLOAD_DIR = config.BASE_DIR / "data" / "uploads"
 
 
+class CompanyPeriod(BaseModel):
+    company: str
+    ticker: str
+    period_label: str
+    fiscal_year: int
+    doc_type: str
+
+
+def _get_doc_or_404(ticker: str, period_label: str):
+    doc = get_document(get_documents(), ticker, period_label)
+    if doc is None:
+        raise HTTPException(status_code=404, detail=f"No document found for {ticker} {period_label}")
+    return doc
+
+
+def _prior_period_label(period_label: str) -> str | None:
+    if period_label.startswith("FY") and period_label[2:].isdigit():
+        return f"FY{int(period_label[2:]) - 1}"
+    return None
+
+
 # ---------------------------------------------------------------------------
-# POST /upload — Ingest a new filing / transcript
+# GET /companies — list all loaded companies/periods
 # ---------------------------------------------------------------------------
 
-@router.post("/upload")
+@router.get("/companies", response_model=list[CompanyPeriod])
+def list_companies() -> list[CompanyPeriod]:
+    seen: dict[tuple[str, str], CompanyPeriod] = {}
+    for doc in get_documents():
+        key = (doc.ticker, doc.period_label)
+        if key not in seen:
+            seen[key] = CompanyPeriod(
+                company=doc.company,
+                ticker=doc.ticker,
+                period_label=doc.period_label,
+                fiscal_year=doc.fiscal_year,
+                doc_type=doc.doc_type,
+            )
+    return list(seen.values())
+
+
+# ---------------------------------------------------------------------------
+# POST /upload — ingest a new filing
+# ---------------------------------------------------------------------------
+
+class UploadResponse(BaseModel):
+    company: str
+    ticker: str
+    period_label: str
+    doc_type: str
+    sections: list[str]
+
+
+@router.post("/upload", response_model=UploadResponse)
 async def upload_document(
     file: UploadFile = File(...),
     ticker: str = Form(...),
-    period: str = Form(...),
+    fiscal_year: int = Form(...),
     doc_type: str = Form(...),
-):
-    """Accept a .txt or .pdf upload, save it to the sample filings directory,
-    parse it, and register it in the in-memory document store."""
+) -> UploadResponse:
+    if doc_type not in ("10-K", "earnings_call"):
+        raise HTTPException(status_code=400, detail="doc_type must be '10-K' or 'earnings_call'")
 
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No file provided.")
+    ext = Path(file.filename or "").suffix.lower()
+    if ext not in (".pdf", ".txt"):
+        raise HTTPException(status_code=400, detail="Only .pdf and .txt files are supported")
 
-    suffix = Path(file.filename).suffix.lower()
-    if suffix not in (".txt", ".pdf"):
-        raise HTTPException(status_code=400, detail=f"Unsupported file type '{suffix}'. Only .txt and .pdf are accepted.")
+    doctype_token = "10K" if doc_type == "10-K" else "earnings_call"
+    ticker = ticker.strip().upper()
+    if not ticker.isalnum():
+        raise HTTPException(status_code=400, detail="Ticker must be alphanumeric")
 
-    # Normalise doc_type for the filename convention used by the parser
-    dtype_map = {"10-K": "10K", "10-Q": "10K", "10K": "10K", "earnings_call": "earnings_call"}
-    dtype_key = dtype_map.get(doc_type, doc_type)
-
-    # Save to data/sample_filings/{TICKER}_FY{YEAR}_{doctype}.{ext}
-    dest_dir = config.SAMPLE_DATA_DIR
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    filename = f"{ticker.upper()}_{period}_{dtype_key}{suffix}"
-    dest_path = dest_dir / filename
-
-    # Write uploaded content to disk
-    with open(dest_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+    UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    dest = UPLOAD_DIR / f"{ticker}_FY{fiscal_year}_{doctype_token}{ext}"
+    with dest.open("wb") as out:
+        shutil.copyfileobj(file.file, out)
 
     try:
-        doc = parse_document(dest_path)
+        parsed = parse_document(dest)
     except Exception as exc:
-        dest_path.unlink(missing_ok=True)
-        raise HTTPException(status_code=422, detail=f"Failed to parse uploaded file: {exc}")
+        dest.unlink(missing_ok=True)
+        raise HTTPException(status_code=422, detail=f"Could not parse document: {exc}") from exc
 
-    add_document(doc)
-
-    return {
-        "status": "success",
-        "message": f"Uploaded and ingested {filename}",
-        "document": {
-            "company": doc.company,
-            "ticker": doc.ticker,
-            "period_label": doc.period_label,
-            "doc_type": doc.doc_type,
-        },
-    }
-
-
-# ---------------------------------------------------------------------------
-# GET /documents — List loaded documents
-# ---------------------------------------------------------------------------
-
-@router.get("/documents")
-def list_documents():
-    """Return metadata for every ingested document."""
+    # Register in the in-memory document list and clear stale LLM caches.
+    # Vectorstore indexing is intentionally skipped here to avoid OOM on free
+    # tier — the vectorstore rebuilds automatically on the next /rag/query call.
     docs = get_documents()
-    return [
-        {
-            "company": d.company,
-            "ticker": d.ticker,
-            "period_label": d.period_label,
-            "period_type": d.period_type,
-            "doc_type": d.doc_type,
-            "fiscal_year": d.fiscal_year,
-        }
-        for d in docs
+    docs[:] = [
+        d for d in docs
+        if not (d.ticker == parsed.ticker and d.period_label == parsed.period_label and d.doc_type == parsed.doc_type)
     ]
+    docs.append(parsed)
+    get_metrics.cache_clear()
+    get_tone.cache_clear()
+    get_risks.cache_clear()
 
-
-# ---------------------------------------------------------------------------
-# GET /metrics — Financial metric extraction
-# ---------------------------------------------------------------------------
-
-@router.get("/metrics")
-def metrics(ticker: str = Query(None), period: str = Query(None)):
-    ticker, period = _require_params(ticker, period)
-    try:
-        result = get_metrics(ticker, period)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return result.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# GET /compare — Period-over-period comparison
-# ---------------------------------------------------------------------------
-
-@router.get("/compare")
-def compare(
-    ticker: str = Query(None),
-    current_period: str = Query(None),
-    prior_period: str = Query(None),
-):
-    if not ticker or not current_period or not prior_period:
-        raise HTTPException(
-            status_code=400,
-            detail="'ticker', 'current_period', and 'prior_period' are all required.",
-        )
-    try:
-        current_metrics = get_metrics(ticker, current_period)
-        prior_metrics = get_metrics(ticker, prior_period)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-
-    comparison = compute_metric_comparison(current_metrics, prior_metrics, comparison_type="YoY")
-    return comparison.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# GET /tone — Management tone analysis
-# ---------------------------------------------------------------------------
-
-@router.get("/tone")
-def tone(ticker: str = Query(None), period: str = Query(None)):
-    ticker, period = _require_params(ticker, period)
-    try:
-        result = get_tone(ticker, period)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return result.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# GET /risks — Risk factor extraction
-# ---------------------------------------------------------------------------
-
-@router.get("/risks")
-def risks(ticker: str = Query(None), period: str = Query(None)):
-    ticker, period = _require_params(ticker, period)
-    try:
-        result = get_risks(ticker, period)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return result.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# GET /benchmark — Peer benchmarking table
-# ---------------------------------------------------------------------------
-
-@router.get("/benchmark")
-def benchmark(
-    tickers: str = Query(None, description="Comma-separated tickers, e.g. TVIZ,GNRG,HLTH"),
-    period: str = Query(None),
-):
-    if not tickers or not period:
-        raise HTTPException(status_code=400, detail="Both 'tickers' and 'period' are required.")
-
-    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
-    if not ticker_list:
-        raise HTTPException(status_code=400, detail="At least one ticker is required.")
-
-    docs = get_documents()
-    try:
-        table = build_benchmark_table(
-            docs,
-            ticker_list,
-            period,
-            metrics_fn=lambda _docs, t, p: get_metrics(t, p),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return table.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# POST /memo — Investment memo generation
-# ---------------------------------------------------------------------------
-
-@router.post("/memo")
-def memo(
-    ticker: str = Query(None),
-    period: str = Query(None),
-    peers: Optional[str] = Query(None, description="Comma-separated peer tickers"),
-):
-    ticker, period = _require_params(ticker, period)
-    peer_list = [t.strip().upper() for t in peers.split(",") if t.strip()] if peers else None
-    docs = get_documents()
-
-    try:
-        result = generate_investment_memo(docs, ticker, period, peer_tickers=peer_list)
-    except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
-    return result.model_dump()
-
-
-# ---------------------------------------------------------------------------
-# GET /ask — RAG Q&A
-# ---------------------------------------------------------------------------
-
-@router.get("/ask")
-def ask(
-    question: str = Query(..., description="Natural-language question about the filings"),
-    ticker: Optional[str] = Query(None),
-    period: Optional[str] = Query(None),
-):
-    """Answer a question using retrieval-augmented generation over the
-    ingested financial documents."""
-    if not question.strip():
-        raise HTTPException(status_code=400, detail="'question' cannot be empty.")
-
-    try:
-        vectorstore = get_or_build_vectorstore()
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Vector store unavailable: {exc}")
-
-    chunks = retrieve(vectorstore, question, k=5, ticker=ticker, period_label=period)
-
-    if not chunks:
-        return {"answer": "No relevant information found in the ingested documents.", "sources": []}
-
-    context = format_context(chunks)
-
-    from app.llm import get_llm
-
-    prompt = (
-        "You are an expert financial analyst. Use ONLY the context below to answer "
-        "the question. If the context does not contain enough information, say so.\n\n"
-        f"CONTEXT:\n{context}\n\n"
-        f"QUESTION: {question}\n\n"
-        "ANSWER:"
+    return UploadResponse(
+        company=parsed.company,
+        ticker=parsed.ticker,
+        period_label=parsed.period_label,
+        doc_type=parsed.doc_type,
+        sections=[s.section_type for s in parsed.sections],
     )
 
-    try:
-        llm = get_llm(temperature=0.1)
-        response = llm.invoke(prompt)
-        answer = response.content if hasattr(response, "content") else str(response)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=503, detail=str(exc))
+
+# ---------------------------------------------------------------------------
+# GET /metrics/{ticker}/{period_label}
+# ---------------------------------------------------------------------------
+
+@router.get("/metrics/{ticker}/{period_label}", response_model=FinancialMetrics)
+def get_metrics_endpoint(ticker: str, period_label: str) -> FinancialMetrics:
+    _get_doc_or_404(ticker, period_label)
+    return get_metrics(ticker, period_label)
+
+
+# ---------------------------------------------------------------------------
+# GET /metrics/{ticker}/{period_label}/comparison
+# ---------------------------------------------------------------------------
+
+@router.get("/metrics/{ticker}/{period_label}/comparison", response_model=MetricComparison)
+def get_metrics_comparison(ticker: str, period_label: str, prior_period: str | None = None) -> MetricComparison:
+    _get_doc_or_404(ticker, period_label)
+    prior = prior_period or _prior_period_label(period_label)
+    if not prior:
+        raise HTTPException(status_code=400, detail="Could not determine prior period; pass ?prior_period=")
+    _get_doc_or_404(ticker, prior)
+    current_m = get_metrics(ticker, period_label)
+    prior_m = get_metrics(ticker, prior)
+    comparison_type = "YoY" if current_m.period_type == "annual" else "QoQ"
+    return compute_metric_comparison(current_m, prior_m, comparison_type=comparison_type)
+
+
+# ---------------------------------------------------------------------------
+# GET /tone/{ticker}/{period_label}
+# ---------------------------------------------------------------------------
+
+@router.get("/tone/{ticker}/{period_label}", response_model=ToneAnalysis)
+def get_tone_endpoint(ticker: str, period_label: str) -> ToneAnalysis:
+    _get_doc_or_404(ticker, period_label)
+    return get_tone(ticker, period_label)
+
+
+# ---------------------------------------------------------------------------
+# GET /tone/{ticker}/{period_label}/comparison
+# ---------------------------------------------------------------------------
+
+@router.get("/tone/{ticker}/{period_label}/comparison", response_model=ToneComparison)
+def get_tone_comparison(ticker: str, period_label: str, prior_period: str | None = None) -> ToneComparison:
+    _get_doc_or_404(ticker, period_label)
+    prior = prior_period or _prior_period_label(period_label)
+    if not prior:
+        raise HTTPException(status_code=400, detail="Could not determine prior period; pass ?prior_period=")
+    _get_doc_or_404(ticker, prior)
+    current_t = get_tone(ticker, period_label)
+    prior_t = get_tone(ticker, prior)
+    return compare_tone(current_t, prior_t)
+
+
+# ---------------------------------------------------------------------------
+# GET /risks/{ticker}/{period_label}
+# ---------------------------------------------------------------------------
+
+@router.get("/risks/{ticker}/{period_label}", response_model=RiskFactorList)
+def get_risks_endpoint(ticker: str, period_label: str) -> RiskFactorList:
+    _get_doc_or_404(ticker, period_label)
+    return get_risks(ticker, period_label)
+
+
+# ---------------------------------------------------------------------------
+# GET /risks/{ticker}/{period_label}/comparison
+# ---------------------------------------------------------------------------
+
+@router.get("/risks/{ticker}/{period_label}/comparison", response_model=RiskComparison)
+def get_risk_comparison(ticker: str, period_label: str, prior_period: str | None = None) -> RiskComparison:
+    _get_doc_or_404(ticker, period_label)
+    prior = prior_period or _prior_period_label(period_label)
+    if not prior:
+        raise HTTPException(status_code=400, detail="Could not determine prior period; pass ?prior_period=")
+    _get_doc_or_404(ticker, prior)
+    current_r = get_risks(ticker, period_label)
+    prior_r = get_risks(ticker, prior)
+    return compare_risk_factors(current_r, prior_r)
+
+
+# ---------------------------------------------------------------------------
+# GET /benchmark/{period_label}
+# ---------------------------------------------------------------------------
+
+@router.get("/benchmark/{period_label}", response_model=BenchmarkTable)
+def get_benchmark(period_label: str, tickers: str = Query(...)) -> BenchmarkTable:
+    docs = get_documents()
+    ticker_list = [t.strip().upper() for t in tickers.split(",") if t.strip()]
+    if not ticker_list:
+        raise HTTPException(status_code=400, detail="Provide at least one ticker")
+    table = build_benchmark_table(docs, ticker_list, period_label, metrics_fn=lambda _docs, t, p: get_metrics(t, p))
+    if not table.rows:
+        raise HTTPException(status_code=404, detail=f"No data found for {ticker_list} in {period_label}")
+    return table
+
+
+# ---------------------------------------------------------------------------
+# GET /memo/{ticker}/{period_label}
+# ---------------------------------------------------------------------------
+
+@router.get("/memo/{ticker}/{period_label}", response_model=InvestmentMemo)
+def get_memo(ticker: str, period_label: str, peers: str | None = Query(default=None)) -> InvestmentMemo:
+    docs = get_documents()
+    _get_doc_or_404(ticker, period_label)
+    peer_tickers = [t.strip().upper() for t in peers.split(",") if t.strip()] if peers else None
+    return generate_investment_memo(docs, ticker, period_label, peer_tickers=peer_tickers)
+
+
+# ---------------------------------------------------------------------------
+# POST /rag/query
+# ---------------------------------------------------------------------------
+
+class RagQueryRequest(BaseModel):
+    query: str
+    ticker: str | None = None
+    period_label: str | None = None
+    section_type: str | None = None
+    k: int = 5
+
+
+class RagQueryResponse(BaseModel):
+    answer: str
+    sources: list[str]
+
+
+@router.post("/rag/query", response_model=RagQueryResponse)
+def rag_query(request: RagQueryRequest) -> RagQueryResponse:
+    documents = retrieve(
+        None,  # vectorstore not used — BM25 retrieval reads from in-memory docs
+        request.query,
+        k=request.k,
+        ticker=request.ticker,
+        period_label=request.period_label,
+        section_type=request.section_type,
+    )
+    if not documents:
+        raise HTTPException(status_code=404, detail="No relevant context found")
+
+    context = format_context(documents)
+    prompt = (
+        "Answer the question using ONLY the context below. If the context does not "
+        "contain the answer, say so explicitly.\n\n"
+        f"CONTEXT:\n{context}\n\nQUESTION: {request.query}"
+    )
+    llm = get_llm(temperature=config.LLM_TEMPERATURE_ANALYSIS)
+    response = llm.invoke(prompt)
 
     sources = [
-        {
-            "ticker": c.metadata.get("ticker"),
-            "period_label": c.metadata.get("period_label"),
-            "section": c.metadata.get("section_title"),
-        }
-        for c in chunks
+        f"{doc.metadata.get('ticker')} {doc.metadata.get('period_label')} - {doc.metadata.get('section_title')}"
+        for doc in documents
     ]
-
-    return {"answer": answer, "sources": sources}
+    return RagQueryResponse(answer=response.content, sources=sources)
